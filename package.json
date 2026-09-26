@@ -1,0 +1,22 @@
+{
+  "name": "pi-find-guard",
+  "version": "0.1.0",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "description": "Pi extension that rewrites bounded `find` calls to bfs and blocks unbounded filesystem-wide scans before they run",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./extensions/find-guard.ts"]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/find-guard.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "typescript": "5.9.3"
+  }
+}
