@@ -13,6 +13,7 @@
  * Disable at any time with PI_FIND_GUARD=off.
  */
 
+import { findCommandSegments, isUnboundedRootToken } from "./shell-scan.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -48,6 +49,8 @@ export interface FindSegment {
 	args: string;
 }
 
+const FIND_NAMES: ReadonlySet<string> = new Set(["find"]);
+
 /**
  * Locate every `find` that actually executes as a command.
  *
@@ -61,53 +64,11 @@ export interface FindSegment {
  * substitution inside double quotes ("$(find ..)") is still detected.
  */
 export function findFindSegments(command: string): FindSegment[] {
-	const WRAPPERS = new Set(["command", "sudo", "env", "nice", "nohup", "timeout", "stdbuf"]);
-	const out: FindSegment[] = [];
-	let inSingle = false;
-	let inDouble = false;
-
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (ch === "'" && !inDouble) {
-			inSingle = !inSingle;
-			continue;
-		}
-		if (ch === '"' && !inSingle) {
-			inDouble = !inDouble;
-			continue;
-		}
-		if (inSingle) continue;
-		if (command.slice(i, i + 4) !== "find") continue;
-
-		// must be a whole word: next char ends the token
-		const next = command[i + 4];
-		if (next !== undefined && !/[\s;|&)`\n\r]/.test(next)) continue;
-
-		// walk back over blanks/escapes to the previous significant char
-		let j = i - 1;
-		while (j >= 0 && (command[j] === " " || command[j] === "\t" || command[j] === "\\")) j--;
-		const prev = j >= 0 ? command[j] : "";
-
-		let inCommandPosition = prev === "" || /[;|&(`\n\r]/.test(prev);
-		if (!inCommandPosition && /[\w-]/.test(prev)) {
-			// maybe a wrapper word: `command find`, `sudo find`, ...
-			let w = j;
-			while (w >= 0 && /[\w-]/.test(command[w])) w--;
-			inCommandPosition = WRAPPERS.has(command.slice(w + 1, j + 1));
-		}
-		if (!inCommandPosition) continue;
-
-		// Inside double quotes only a command substitution is live, i.e. "$(find ..)".
-		if (inDouble && prev !== "(" && prev !== "`") continue;
-
-		// arguments run to the next command separator
-		let k = i + 4;
-		while (k < command.length && !/[;|&\n\r)`]/.test(command[k])) k++;
-
-		out.push({ text: command.slice(i, k), findOffset: i, args: command.slice(i + 4, k) });
-		i = k - 1;
-	}
-	return out;
+	return findCommandSegments(command, FIND_NAMES).map((s) => ({
+		text: command.slice(s.offset, s.offset + s.name.length + s.args.length),
+		findOffset: s.offset,
+		args: s.args,
+	}));
 }
 
 /**
@@ -123,16 +84,7 @@ export function isUnboundedRoot(args: string): boolean {
 		roots.push(t);
 	}
 	if (roots.length === 0) return false; // `find -name x` defaults to `.` — bounded
-	return roots.some((r) => {
-		const cleaned = r.replace(/^["']|["']$/g, "");
-		if (cleaned === "/" || cleaned === "//") return true;
-		if (/^\/\*+$/.test(cleaned)) return true;
-		if (cleaned === "~" || cleaned === "~/") return true;
-		if (/^~\/(\*+)?$/.test(cleaned)) return true;
-		if (cleaned === "$HOME" || cleaned === "${HOME}") return true;
-		if (/^\$(?:\{)?HOME(?:\})?\/\*+$/.test(cleaned)) return true;
-		return false;
-	});
+	return roots.some((r) => isUnboundedRootToken(r));
 }
 
 export function hasMaxDepth(args: string): boolean {
@@ -156,7 +108,7 @@ const BLOCK_REASON = [
 	"",
 	"  * Narrow the roots, e.g. `find /usr/local/cuda /usr/lib /opt /home -name 'libcudnn.so*' 2>/dev/null`",
 	"  * Add a depth cap, e.g. `find ~ -maxdepth 4 -name 'libcudnn.so*' 2>/dev/null`",
-	"  * Use a package index instead of scanning: `ldconfig -p | grep cudnn`",
+	"  * Use a package index instead of scanning: `ldconfig -p | rg cudnn`",
 	"  * Use the locator db when available: `locate 'libcudnn.so.9'`",
 ].join("\n");
 

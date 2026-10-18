@@ -1,15 +1,20 @@
 {
-  "name": "pi-find-guard",
+  "name": "pi-search-guard",
   "version": "0.1.0",
   "type": "module",
-  "keywords": ["pi-package"],
-  "description": "Pi extension that rewrites bounded `find` calls to bfs and blocks unbounded filesystem-wide scans before they run",
+  "keywords": [
+    "pi-package"
+  ],
+  "description": "Pi extensions that make search safe: bounded `find` calls are rewritten to bfs, recursive or directory `grep` is refused in favour of ripgrep, and unbounded scans are blocked before they run",
   "license": "MIT",
   "pi": {
-    "extensions": ["./extensions/find-guard.ts"]
+    "extensions": [
+      "./extensions/find-guard.ts",
+      "./extensions/grep-guard.ts"
+    ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/find-guard.test.ts",
+    "test": "node --experimental-strip-types --test test/find-guard.test.ts test/grep-guard.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
@@ -17,6 +22,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.87.1",
+    "@types/node": "^26.6.5",
     "typescript": "5.9.3"
   }
 }
