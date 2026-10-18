@@ -1,17 +1,17 @@
 # pi-search-guard
 
-Two Pi extensions that change how the model searches the filesystem.
+两个 Pi 扩展，用来改变模型搜索文件系统的方式。
 
-- **find-guard** hooks `tool_call`, rewrites bounded `find` calls to [bfs](https://github.com/tavianator/bfs), and refuses filesystem-wide scans.
-- **grep-guard** refuses recursive and directory-searching `grep` and points the model at [ripgrep](https://github.com/BurntSushi/ripgrep); single files and stdin filters are left alone.
+- **find-guard** 挂钩 `tool_call`，把带上限的 `find` 调用改写成 [bfs](https://github.com/tavianator/bfs)，并拒绝全盘扫描。
+- **grep-guard** 拒绝递归或针对目录的 `grep`，并引导模型改用 [ripgrep](https://github.com/BurntSushi/ripgrep)；单文件搜索和标准输入过滤不受影响。
 
-Both exist because a single unguarded command looks harmless and costs minutes. This one took **12 minutes 14 seconds** in a real session:
+做这两个扩展的原因很简单：一条没有约束的命令看起来毫无害处，代价却是几分钟。下面这条命令在一次真实会话里跑了 **12 分 14 秒**：
 
 ```bash
 find / -name "libcudnn.so.9*" 2>/dev/null | head
 ```
 
-And this one, run from the home directory, spent minutes matching strings inside `node_modules`, npm cache blobs, session logs and binaries before the user interrupted it:
+下面这条在家目录里执行，在 `node_modules`、npm 缓存文件、会话日志和二进制文件中匹配字符串，直到用户手动中断：
 
 ```bash
 grep -rl "frontend-design" .
@@ -19,25 +19,25 @@ grep -rl "frontend-design" .
 
 ## find-guard
 
-### Behavior
+### 行为
 
-| Command | Result |
+| 命令 | 结果 |
 |---|---|
-| `find / -name x` | Blocked, with alternatives |
-| `find ~ -name x` | Blocked, with alternatives |
-| `find $HOME -name x` | Blocked, with alternatives |
-| `find / -maxdepth 2 -name x` | Rewritten to bfs |
-| `find ~/.cache/uv -maxdepth 3 -iname 'torch-*'` | Rewritten to bfs |
-| `find . -name '*.py'` | Rewritten to bfs |
-| `ls`, anything without `find` | Untouched |
+| `find / -name x` | 拦截，并给出替代方案 |
+| `find ~ -name x` | 拦截，并给出替代方案 |
+| `find $HOME -name x` | 拦截，并给出替代方案 |
+| `find / -maxdepth 2 -name x` | 改写为 bfs |
+| `find ~/.cache/uv -maxdepth 3 -iname 'torch-*'` | 改写为 bfs |
+| `find . -name '*.py'` | 改写为 bfs |
+| `ls`，以及任何不含 `find` 的命令 | 不改动 |
 
-The rule is simple: a root of `/`, `~`, `$HOME`, or `${HOME}` without a `-maxdepth` cap is refused. Everything else is rewritten.
+规则很简单：搜索起点是 `/`、`~`、`$HOME` 或 `${HOME}`，且没有 `-maxdepth` 限制，就拒绝；其他情况一律改写。
 
-### Why block instead of just speeding up
+### 为什么是拦截而不是加速
 
-A full-filesystem scan spends most of its time in `/proc`, `/sys`, `/mnt`, and cache directories. Making it 4x faster still leaves minutes of waiting, and the result is rarely useful. Refusing the command and returning the tool result that explains the alternatives gets the model to a better approach faster than a faster wrong approach does.
+全盘扫描的时间大多花在 `/proc`、`/sys`、`/mnt` 和各处缓存目录上。即使快上 4 倍，等待时间仍然以分钟计，而结果往往没什么用。拦截命令并返回解释替代方案的工具结果，能让模型更快走到更好的做法，比一个更快的错误做法更有价值。
 
-The block reason is returned to the model as the tool result, so it can adapt:
+拦截原因会作为工具结果返回给模型，模型可以据此调整：
 
 ```text
 Blocked: unbounded filesystem-wide `find` (root `/` or `$HOME` without `-maxdepth`).
@@ -51,61 +51,61 @@ machine a `find /` run took over 12 minutes. Do not retry it as-is. Instead:
   * Use the locator db when available: `locate 'libcudnn.so.9'`
 ```
 
-### Why bfs
+### 为什么选 bfs
 
-bfs is a drop-in replacement for GNU find. It accepts the same flags, resolves `-name` globs the same way, and honors the same default behavior for hidden files and gitignored paths. On a `/usr` tree of 137,373 entries:
+bfs 可以直接替代 GNU find。它接受同样的参数，以同样的方式解析 `-name` 通配符，对隐藏文件和被 gitignore 的路径也保持同样的默认行为。在一棵含 137,373 个条目的 `/usr` 目录树上：
 
-| Command | Time |
+| 命令 | 耗时 |
 |---|---|
 | `find /usr -type f` | 1.22 s |
 | `bfs /usr -type f` | 0.31 s |
 
-bfs also stays single-threaded, which was faster than `-j20` on the same tree.
+bfs 保持单线程运行，在同一棵目录树上比 `-j20` 更快。
 
-The rewrite is invisible to the model. Only the output changes.
+改写对模型是不可见的，只有输出会变。
 
 ## grep-guard
 
-### Behavior
+### 行为
 
-This environment standardises on ripgrep for searching directories, so a `grep` that walks or targets a directory is refused and the model is told to use `rg`:
+本环境统一用 ripgrep 搜索目录，因此遍历目录或指向目录的 `grep` 会被拒绝，并告知模型改用 `rg`：
 
-- **recursive**: `grep -r` / `-R` / `--recursive` / `-d recurse`
-- **a directory operand**: `grep foo src/`, `grep foo .`, `grep foo ~/.cache`
+- **递归**：`grep -r` / `-R` / `--recursive` / `-d recurse`
+- **操作数是目录**：`grep foo src/`、`grep foo .`、`grep foo ~/.cache`
 
-Everything else is left alone: a single file (`grep foo file.txt`), a glob (`grep foo *.py`), a path that does not exist, and stdin filters (`ps aux | grep python`). Directory detection resolves each operand against the effective cwd (a `cd` earlier in the command counts), expands `~`/`$HOME`, and stats it; globs and missing paths are treated as files. The guard never rewrites the command: the model writes the rg command itself.
+其他情况都不动：单文件（`grep foo file.txt`）、通配符（`grep foo *.py`）、不存在的路径，以及标准输入过滤（`ps aux | grep python`）。目录判断会结合命令中此前的 `cd`，把每个操作数相对当前工作目录解析，展开 `~`/`$HOME` 后再做 stat；通配符和不存在的路径按文件处理。该守卫从不改写命令，rg 命令由模型自己写。
 
-| Command | Result |
+| 命令 | 结果 |
 |---|---|
-| `grep -rn x src` | Blocked (recursive) |
-| `grep x src/` | Blocked (directory operand) |
-| `grep x .` | Blocked (directory operand) |
-| `grep x file.txt` | Allowed (single file) |
-| `grep x *.py` | Allowed (glob) |
-| `grep x missing.txt` | Allowed (unknown path) |
-| `ps aux \| grep python` | Allowed (stdin filter) |
-| `grep foo` | Allowed (reads stdin) |
-| `rg -n x src` | Untouched |
-| `echo "grep -rn x ."` | Untouched (data, not a command) |
-| any `grep` when rg is absent | Allowed through (fallback) |
+| `grep -rn x src` | 拦截（递归） |
+| `grep x src/` | 拦截（操作数是目录） |
+| `grep x .` | 拦截（操作数是目录） |
+| `grep x file.txt` | 放行（单文件） |
+| `grep x *.py` | 放行（通配符） |
+| `grep x missing.txt` | 放行（路径未知） |
+| `ps aux \| grep python` | 放行（标准输入过滤） |
+| `grep foo` | 放行（读取标准输入） |
+| `rg -n x src` | 不改动 |
+| `echo "grep -rn x ."` | 不改动（是数据，不是命令） |
+| 未安装 rg 时的任何 `grep` | 放行（回退） |
 
-### Why block instead of rewrite
+### 为什么是拦截而不是改写
 
-`bfs` is a faithful drop-in for `find`; `rg` is **not** a drop-in for `grep`. Several flags share a spelling with a different meaning, so a silent substitution can corrupt the search:
+`bfs` 是 `find` 的忠实替代品，`rg` 则**不是** `grep` 的替代品。不少参数的拼写相同而含义不同，静默替换可能让搜索结果出错：
 
-| Flag | GNU grep | ripgrep |
+| 参数 | GNU grep | ripgrep |
 |---|---|---|
-| `-r` | recursive | `--replace` (takes a value) |
-| `-h` | no filename | print help |
-| `-E` | extended regexp | `--encoding` (takes a value) |
-| `-s` | suppress error messages | `--case-sensitive` (overrides `-i`) |
-| `-L` | files without match | `--follow` |
-| `-z` | null data | `--search-zip` |
-| `-U` / `-u` | binary / unbuffered | multiline / `--unrestricted` |
+| `-r` | 递归 | `--replace`（需要取值） |
+| `-h` | 不显示文件名 | 打印帮助 |
+| `-E` | 扩展正则 | `--encoding`（需要取值） |
+| `-s` | 不显示错误信息 | `--case-sensitive`（覆盖 `-i`） |
+| `-L` | 列出不匹配的文件 | `--follow` |
+| `-z` | 空字符分隔数据 | `--search-zip` |
+| `-U` / `-u` | 二进制 / 无缓冲 | 多行模式 / `--unrestricted` |
 
-Rather than maintain a whitelist of translatable flags and risk changing results, grep-guard refuses and hands the model both the translation patterns and the collision list. The model keeps control of what the command means.
+与其维护一份可翻译参数的白名单、承担改变搜索结果的风险，grep-guard 选择拒绝，并把翻译写法和冲突参数一并交给模型。命令的含义仍由模型掌控。
 
-The reason returned to the model:
+返回给模型的原因：
 
 ```text
 Blocked: this environment uses ripgrep for recursive and directory searches — use `rg`.
@@ -129,48 +129,48 @@ rg skips hidden and .gitignored paths by default; add --hidden --no-ignore
 to search them the way `grep -r` does.
 ```
 
-## Install
+## 安装
 
-Install both backends first. Without `bfs`, find-guard only blocks; without `rg`, grep-guard lets `grep` through.
+先装好两个后端。没有 `bfs` 时 find-guard 只能拦截；没有 `rg` 时 grep-guard 会放行 `grep`。
 
 ```bash
 sudo apt install bfs ripgrep    # Debian, Ubuntu
 brew install bfs ripgrep        # macOS
 ```
 
-Then install the extensions:
+然后安装扩展：
 
 ```bash
 pi install git:github.com/sg8010/pi-search-guard
 ```
 
-Or load them for a single run:
+或者只加载一次：
 
 ```bash
 pi -e ./extensions/find-guard.ts -e ./extensions/grep-guard.ts
 ```
 
-After installing from a local path, run `/reload` in Pi.
+从本地路径安装后，在 Pi 里运行 `/reload`。
 
-## Disable
+## 关闭
 
 ```bash
-PI_FIND_GUARD=off pi     # disable find-guard
-PI_GREP_GUARD=off pi     # disable grep-guard
+PI_FIND_GUARD=off pi     # 关闭 find-guard
+PI_GREP_GUARD=off pi     # 关闭 grep-guard
 ```
 
-## Test
+## 测试
 
 ```bash
 npm test
 npm run typecheck
 ```
 
-## Scope
+## 适用范围
 
-The extensions only intercept Pi's built-in `bash` tool. Commands you type yourself, and processes a script starts internally, are not affected.
+扩展只拦截 Pi 内置的 `bash` 工具。你自己输入的命令，以及脚本内部启动的进程，都不受影响。
 
-Command detection uses a small shell-aware scanner shared by both guards rather than a full parser. It tracks single and double quote state, and reports a command only in command position. It handles:
+命令识别由两个守卫共用的一个小型、感知 shell 语法的扫描器完成，而不是完整的解析器。它跟踪单引号和双引号状态，只在命令位置报告命令。它能处理：
 
 ```text
 find . -name x              echo a; find . -name x
@@ -180,16 +180,16 @@ command grep -rn x .        sudo grep -rn x /
 timeout 20 grep -rn x .     grep -rn x . 2>/dev/null | head
 ```
 
-It ignores a command name appearing as data (`echo "find /"`, `grep find file`) and as a path (`/usr/bin/find`).
+它会忽略作为数据出现的命令名（`echo "find /"`、`grep find file`）和作为路径出现的命令名（`/usr/bin/find`）。
 
-Two things can defeat the scanner: obfuscated command names such as `f""ind /`, and `eval 'find /'`. Detecting those reliably requires a full shell parser, which would misread ordinary quoted text often enough to be worse than the current tradeoff.
+有两种情况能绕过扫描器：经过混淆的命令名，例如 `f""ind /`；以及 `eval 'find /'`。可靠地识别它们需要完整的 shell 解析器，而那样的解析器会经常误判普通的带引号文本，得不偿失。
 
-Each guard's `tool_call` handler failure blocks the tool as a fail-safe, so a broken extension cannot silently let scans through.
+每个守卫的 `tool_call` 处理函数一旦出错，就按故障安全原则拦截该工具，这样坏掉的扩展不会悄悄放过扫描。
 
-## Note on output order
+## 关于输出顺序
 
-GNU find walks depth-first; bfs walks breadth-first. The set of matched files is identical, but a command that consumes the stream such as `find . -name x | head` may select different lines. This is the one behavioral difference the rewrite introduces.
+GNU find 按深度优先遍历，bfs 按广度优先遍历。匹配到的文件集合完全相同，但会消耗流的命令（例如 `find . -name x | head`）可能选中不同的行。这是改写引入的唯一行为差异。
 
-## License
+## 许可证
 
 MIT
