@@ -96,8 +96,6 @@ export interface Analysis {
 	rewritten: string | null;
 	/** Non-null when the call must be refused. */
 	blockReason: string | null;
-	/** Human-readable notes about what was done, for the notification line. */
-	notes: string[];
 }
 
 const BLOCK_REASON = [
@@ -118,16 +116,15 @@ const BLOCK_REASON = [
  * @param bfsPath absolute path to bfs, or null when bfs is unavailable
  */
 export function analyzeCommand(command: string, bfsPath: string | null): Analysis {
-	const notes: string[] = [];
 	const finds = findFindSegments(command);
 
 	const unbounded = finds.filter((f) => isUnboundedRoot(f.args) && !hasMaxDepth(f.args));
 	if (unbounded.length > 0) {
-		return { rewritten: null, blockReason: BLOCK_REASON, notes: ["blocked full-filesystem scan"] };
+		return { rewritten: null, blockReason: BLOCK_REASON };
 	}
 
 	if (finds.length === 0) {
-		return { rewritten: null, blockReason: null, notes: [] };
+		return { rewritten: null, blockReason: null };
 	}
 
 	if (bfsPath) {
@@ -136,11 +133,10 @@ export function analyzeCommand(command: string, bfsPath: string | null): Analysi
 		for (const f of [...finds].sort((a, b) => b.findOffset - a.findOffset)) {
 			out = out.slice(0, f.findOffset) + bfsPath + out.slice(f.findOffset + 4);
 		}
-		notes.push(`rewrote ${finds.length} find -> bfs`);
-		return { rewritten: out, blockReason: null, notes };
+		return { rewritten: out, blockReason: null };
 	}
 
-	return { rewritten: null, blockReason: null, notes: [] };
+	return { rewritten: null, blockReason: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +159,7 @@ export default function (pi: ExtensionAPI) {
 		const command = event.input.command;
 		if (typeof command !== "string" || command.length === 0) return undefined;
 
-		const { rewritten, blockReason, notes } = analyzeCommand(command, bfsPath);
+		const { rewritten, blockReason } = analyzeCommand(command, bfsPath);
 
 		if (blockReason) {
 			ctx.ui.notify("find-guard: blocked unbounded `find` scan", "warning");
@@ -171,9 +167,9 @@ export default function (pi: ExtensionAPI) {
 			return { block: true, reason: blockReason };
 		}
 
+		// The rewrite is silent: it changes only how the search runs, not its result.
 		if (rewritten !== null && rewritten !== command) {
 			event.input.command = rewritten;
-			ctx.ui.notify(`find-guard: ${notes.join(", ")}`, "info");
 		}
 
 		return undefined;
