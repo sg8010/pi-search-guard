@@ -129,6 +129,14 @@ test("lets single files, globs, stdin and data through", () => {
 	}
 });
 
+test("treats heredoc bodies as data", () => {
+	const quoted = ["cat <<'EOF'", "grep -rn x src", "EOF"].join("\n");
+	assert.equal(findGatedGrep(quoted, CWD, HOME, stat), null);
+
+	const unquoted = ["cat <<EOF", "grep x .", "EOF", "grep x a.txt"].join("\n");
+	assert.equal(findGatedGrep(unquoted, CWD, HOME, stat), null);
+});
+
 // ---------------------------------------------------------------------------
 // analyzeCommand
 

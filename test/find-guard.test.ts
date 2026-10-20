@@ -105,6 +105,59 @@ test("detects every find in a chain", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Heredocs: bodies are data, not commands
+
+test("ignores find in a quoted heredoc body", () => {
+	const cmd = ["git commit -F - <<'EOF'", "find -> bfs 改写改为静默", "EOF"].join("\n");
+	assert.equal(findFindSegments(cmd).length, 0);
+	assert.equal(analyzeCommand(cmd, BFS).rewritten, null);
+});
+
+test("ignores find in an unquoted heredoc body when there is no substitution", () => {
+	const cmd = ["cat <<EOF", "find / -name x", "EOF"].join("\n");
+	assert.equal(findFindSegments(cmd).length, 0);
+	assert.equal(analyzeCommand(cmd, BFS).blockReason, null);
+});
+
+test("still finds real commands after a heredoc body", () => {
+	const cmd = ["cat <<'EOF'", "find / -name x", "EOF", "find . -name y"].join("\n");
+	const segs = findFindSegments(cmd);
+	assert.equal(segs.length, 1);
+	assert.equal(segs[0].findOffset, cmd.lastIndexOf("find"));
+});
+
+test("handles several heredocs on one line", () => {
+	const cmd = ["cat <<'A' <<'B'", "find /", "A", "find ~", "B", "find . -name z"].join("\n");
+	assert.equal(findFindSegments(cmd).length, 1);
+	assert.equal(analyzeCommand(cmd, BFS).rewritten, cmd.replace("find . -name z", `${BFS} . -name z`));
+});
+
+test("still inspects command substitution in an unquoted heredoc body", () => {
+	const cmd = ["cat <<EOF", "$(find / -name x)", "EOF"].join("\n");
+	assert.ok(analyzeCommand(cmd, BFS).blockReason, "expected the substitution to be seen");
+});
+
+test("a quoted heredoc body keeps a substitution inert", () => {
+	const cmd = ["cat <<'EOF'", "$(find / -name x)", "EOF"].join("\n");
+	assert.equal(analyzeCommand(cmd, BFS).blockReason, null);
+});
+
+test("does not confuse an arithmetic shift or a herestring with a heredoc", () => {
+	assert.equal(findFindSegments("echo $((1 << 2)); find . -name x").length, 1);
+	assert.equal(findFindSegments("echo $((1 << x)); find . -name y").length, 1);
+	assert.equal(findFindSegments('cat <<< "find /"').length, 0);
+	assert.equal(findFindSegments("cat <<< find").length, 0);
+});
+
+test("handles <<- tab-stripped terminators and CRLF", () => {
+	const tabs = ["cat <<-EOF", "\tfind / -name x", "\tEOF", "find . -name y"].join("\n");
+	assert.equal(findFindSegments(tabs).length, 1);
+
+	const crlf = ["cat <<'EOF'", "find / -name x", "EOF", "find . -name y"].join("\r\n");
+	assert.equal(findFindSegments(crlf).length, 1);
+});
+
+// ---------------------------------------------------------------------------
 // analyzeCommand: blocking
 
 test("blocks the real full-filesystem command", () => {
